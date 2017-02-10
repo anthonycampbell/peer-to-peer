@@ -140,7 +140,7 @@ func main() {
 		peerClient.Close()
 	}
 
-	fmt.Println(PEERSIPPORTS)
+	//fmt.Println(PEERSIPPORTS)
 	JoinPrint(LOCALPID)
 
 	for {
@@ -154,7 +154,7 @@ func main() {
 
 		mutex.Lock()
 		if nextCap != "" {
-			fmt.Println("getting resource ...")
+			//fmt.Println("getting resource ...")
 			resourceArgs := &ResourceRequest{SID, ""}
 			var resourceReply Resource
 			rr := &resourceReply
@@ -182,6 +182,7 @@ func main() {
 			nextCap = PEERSIPPORTS[peerIds[first]]
 		case numRemaining < 1:
 			RESOURCES.FinalPrint(LOCALPID)
+			//fmt.Println(PEERSIPPORTS)
 			closePeers()
 		default:
 			nextCap = PEERSIPPORTS[peerIds[i+1]]
@@ -201,8 +202,8 @@ func main() {
 func (t *Peer) JoinPeer(newPeer *JoinArg, reply *Join) error {
 	mutex.Lock()
 	PEERSIPPORTS[newPeer.NewPeerId] = newPeer.NewPeerIpPort
-	fmt.Println(PEERSIPPORTS)
-	fmt.Println("joining ...")
+	//fmt.Println(PEERSIPPORTS)
+	//fmt.Println("joining ...")
 	var sendPeersReply string
 	for id, ip := range PEERSIPPORTS {
 		if (ip != LOCALIPPORT) && (ip != newPeer.NewPeerIpPort) {
@@ -252,15 +253,22 @@ func getPeerIds(peersIpPorts map[int]string) []int {
 func closePeers() {
 	str := ""
 	for _, ip := range PEERSIPPORTS {
-		conn, _ := rpc.Dial("tcp", ip)
-		err := conn.Call("Peer.Close", &str, &str)
-		fmt.Println(err)
+		if ip != LOCALIPPORT {
+			conn, err := rpc.Dial("tcp", ip)
+			if err != nil {
+				continue
+			}
+			err = conn.Call("Peer.ClosePeer", &str, &str)
+			if err != nil {
+				continue
+			}
+		}
 
 	}
 	os.Exit(0)
 }
 
-func (t *Peer) Close(args *string, reply *string) error {
+func (t *Peer) ClosePeer(args *string, reply *string) error {
 	os.Exit(0)
 	return nil
 }
@@ -277,7 +285,7 @@ func (t *Peer) ForwardResource(newResource *Resource, reply *string) error {
 
 func (t *Peer) SendPeers(peers *map[int]string, reply *string) error {
 	PEERSIPPORTS = *peers
-	fmt.Println(PEERSIPPORTS)
+	//fmt.Println(PEERSIPPORTS)
 	*reply = ""
 	return nil
 }
