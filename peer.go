@@ -85,6 +85,7 @@ var RESOURCES Resources
 var PEERSIPPORTS = make(map[int]string)
 var SID int
 var RESOURCESERVER string
+var CAPTAINIP string
 
 var mutex = &sync.Mutex{}
 
@@ -95,6 +96,7 @@ func main() {
 	var first int
 	var peerIds []int
 	var i int
+	//var nextCapHeartMonitor string
 	nextCap = "nil"
 	// Parse the command line args, panic if error
 	mode, physicalPeerId, peerIpPort, otherIpPort, err := ParseArguments()
@@ -119,6 +121,7 @@ func main() {
 	if mode == BOOTSTRAP {
 		CAPTAIN = true
 		RESOURCESERVER = otherIpPort
+		CAPTAINIP = LOCALIPPORT
 		resourceClient, _ := rpc.Dial("tcp", RESOURCESERVER)
 		initArgs := &Init{""}
 		err = resourceClient.Call("RServer.InitSession", initArgs, &SID)
@@ -144,62 +147,104 @@ func main() {
 	JoinPrint(LOCALPID)
 
 	for {
+		//fmt.Println("looping ...")
+		//time.Sleep(5 * time.Second)
 		mutex.Lock()
 		for !CAPTAIN {
-			//monitor captain heartbeat
+			/*c, err := rpc.Dial("tcp", CAPTAINIP)
+			if err != nil {
+				peerIds = getPeerIds(PEERSIPPORTS)
+				nextCapHeartMonitor = PEERSIPPORTS[peerIds[0]]
+				if LOCALIPPORT == nextCapHeartMonitor {
+					CAPTAIN = true
+				}
+				CAPTAINIP = nextCapHeartMonitor
+			} else if err == nil {
+				c.Close()
+			}*/
+			time.Sleep(5 * time.Second)
+			if CAPTAINIP != "nil" {
+				peerIds1 := getPeerIds(PEERSIPPORTS)
+				nextCapHeartMonitor := PEERSIPPORTS[peerIds1[0]]
+				if LOCALIPPORT == nextCapHeartMonitor {
+					CAPTAIN = true
+				}
+			}
+			CAPTAINIP = "goo"
 		}
 		mutex.Unlock()
 
-		time.Sleep(4 * time.Second)
+		time.Sleep(3 * time.Second)
+
+		str := "nil"
+		updateCaptainIps(&str)
 
 		mutex.Lock()
 		if nextCap != "" {
-			//fmt.Println("getting resource ...")
-			resourceArgs := &ResourceRequest{SID, ""}
+			fmt.Println("getting resource ...")
+			resourceArgs := ResourceRequest{SID, ""}
 			var resourceReply Resource
 			rr := &resourceReply
-			resourceClient, _ := rpc.Dial("tcp", RESOURCESERVER)
-			err = resourceClient.Call("RServer.GetResource", resourceArgs, rr)
+			resourceClient, err := rpc.Dial("tcp", RESOURCESERVER)
+			if err != nil {
+
+			}
+			err = resourceClient.Call("RServer.GetResource", &resourceArgs, rr)
 			resourceClient.Close()
 			RESOURCES = append(RESOURCES, *rr)
 			sendOutResources(rr)
 		}
 
 		//relinquish captainhood
-		peerIds = getPeerIds(PEERSIPPORTS)
-		last = len(PEERSIPPORTS) - 1
-		first = 0
-		for i = 0; i <= last; i++ {
-			if peerIds[i] == LOCALPID {
+		for {
+			peerIds = getPeerIds(PEERSIPPORTS)
+			last = len(PEERSIPPORTS) - 1
+			first = 0
+			for i = 0; i <= last; i++ {
+				if peerIds[i] == LOCALPID {
+					break
+				}
+			}
+			numRemaining := RESOURCES[len(RESOURCES)-1].NumRemaining
+			switch {
+			case last == first && numRemaining >= 1:
+				nextCap = ""
+			case i == last && last != first && numRemaining >= 1:
+				nextCap = PEERSIPPORTS[peerIds[first]]
+			case numRemaining < 1:
+				RESOURCES.FinalPrint(LOCALPID)
+				//fmt.Println(PEERSIPPORTS)
+				closePeers()
+			default:
+				nextCap = PEERSIPPORTS[peerIds[i+1]]
+			}
+			if nextCap == "" {
 				break
 			}
-		}
-		numRemaining := RESOURCES[len(RESOURCES)-1].NumRemaining
-		switch {
-		case last == first && numRemaining >= 1:
-			nextCap = ""
-		case i == last && last != first && numRemaining >= 1:
-			nextCap = PEERSIPPORTS[peerIds[first]]
-		case numRemaining < 1:
-			RESOURCES.FinalPrint(LOCALPID)
-			//fmt.Println(PEERSIPPORTS)
-			closePeers()
-		default:
-			nextCap = PEERSIPPORTS[peerIds[i+1]]
-		}
-		if nextCap != "" {
+			//updateCaptainIps(&nextCap)
 			CAPTAIN = false
-			newCapClient, _ := rpc.Dial("tcp", nextCap)
+			newCapClient, err := rpc.Dial("tcp", nextCap)
+			if err != nil {
+				if i == last {
+					delete(PEERSIPPORTS, peerIds[first])
+				} else {
+					delete(PEERSIPPORTS, peerIds[i+1])
+				}
+				continue
+			}
 			var changeCapArgs string
 			var changeCapReply string
 			err = newCapClient.Call("Peer.ChangeCap", &changeCapArgs, &changeCapReply)
 			newCapClient.Close()
+			break
 		}
 		mutex.Unlock()
+
 	}
 }
 
 func (t *Peer) JoinPeer(newPeer *JoinArg, reply *Join) error {
+
 	mutex.Lock()
 	PEERSIPPORTS[newPeer.NewPeerId] = newPeer.NewPeerIpPort
 	//fmt.Println(PEERSIPPORTS)
@@ -241,6 +286,21 @@ func sendOutResources(newResource *Resource) {
 	}
 }
 
+func updateCaptainIps(newCap *string) {
+	for id, ip := range PEERSIPPORTS {
+		if ip != LOCALIPPORT {
+			peerClient, err := rpc.Dial("tcp", ip)
+			if err != nil {
+				delete(PEERSIPPORTS, id)
+				continue
+			}
+			forwardResourceReply := ""
+			err = peerClient.Call("Peer.ChangeMonitor", newCap, &forwardResourceReply)
+			peerClient.Close()
+		}
+	}
+}
+
 func getPeerIds(peersIpPorts map[int]string) []int {
 	peerIds := make([]int, 0, len(peersIpPorts))
 	for id := range peersIpPorts {
@@ -266,6 +326,11 @@ func closePeers() {
 
 	}
 	os.Exit(0)
+}
+
+func (t *Peer) ChangeMonitor(newCap *string, reply *string) error {
+	CAPTAINIP = *newCap
+	return nil
 }
 
 func (t *Peer) ClosePeer(args *string, reply *string) error {
